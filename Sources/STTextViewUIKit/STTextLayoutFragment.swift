@@ -2,7 +2,6 @@
 //  https://github.com/krzyzanowskim/STTextView/blob/main/LICENSE.md
 
 import UIKit
-import STObjCLandShim
 
 final class STTextLayoutFragment: NSTextLayoutFragment {
     private let paragraphStyle: NSParagraphStyle
@@ -40,8 +39,6 @@ final class STTextLayoutFragment: NSTextLayoutFragment {
 
         if useThinStrokes {
             context.setShouldSmoothFonts(true)
-            savedFontSmoothingStyle = STContextGetFontSmoothingStyle(context)
-            STContextSetFontSmoothingStyle(context, 16)
         }
 #endif
 
@@ -67,7 +64,7 @@ final class STTextLayoutFragment: NSTextLayoutFragment {
 
 #if USE_FONT_SMOOTHING_STYLE
         if (useThinStrokes) {
-            STContextSetFontSmoothingStyle(context, savedFontSmoothingStyle);
+            
         }
 #endif
         context.restoreGState()
