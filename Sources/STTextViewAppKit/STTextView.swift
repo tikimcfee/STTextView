@@ -7,6 +7,7 @@
 //      |---contentView
 //              |---(STInsertionPointView | STTextLayoutFragmentView)
 //      |---decorationView
+//      |---gutterView
 //
 //
 // The default implementation of the NSView method inputContext manages
@@ -227,10 +228,10 @@ import AVFoundation
 
             if let prevLocation {
                 // restore selection location
-                setSelectedTextRange(NSTextRange(location: prevLocation))
+                setSelectedTextRange(NSTextRange(location: prevLocation), updateLayout: true)
             } else {
                 // or try to set at the begining of the document
-                setSelectedTextRange(NSTextRange(location: textContentManager.documentRange.location))
+                setSelectedTextRange(NSTextRange(location: textContentManager.documentRange.location), updateLayout: true)
             }
         }
         get {
@@ -249,10 +250,10 @@ import AVFoundation
 
             if let prevLocation {
                 // restore selection location
-                setSelectedTextRange(NSTextRange(location: prevLocation))
+                setSelectedTextRange(NSTextRange(location: prevLocation), updateLayout: true)
             } else {
                 // or try to set at the begining of the document
-                setSelectedTextRange(NSTextRange(location: textContentManager.documentRange.location))
+                setSelectedTextRange(NSTextRange(location: textContentManager.documentRange.location), updateLayout: true)
             }
         }
         get {
@@ -340,18 +341,15 @@ import AVFoundation
 
     /// Enable to show line numbers in the gutter.
     @Invalidating(.layout)
-    open var showLineNumbers: Bool = false {
+    open var showsLineNumbers: Bool = false {
         didSet {
-            isRulerVisible = showLineNumbers
+            isGutterVisible = showsLineNumbers
         }
     }
 
     /// Gutter view
-    open var gutterView: STLineNumberRulerView? {
-        get {
-            scrollView?.verticalRulerView as? STLineNumberRulerView
-        }
-    }
+    open var gutterView: STGutterView?
+    internal var scrollViewFrameObserver: NSKeyValueObservation?
 
     /// The highlight color of the selected line.
     ///
@@ -501,9 +499,10 @@ import AVFoundation
     @objc public lazy var isAutomaticQuoteSubstitutionEnabled = NSSpellChecker.isAutomaticQuoteSubstitutionEnabled
 
     /// A Boolean value that indicates whether to substitute visible glyphs for whitespace and other typically invisible characters.
-    open var showsInvisibleCharacters: Bool = false {
+    @Invalidating(.layout)
+    public var showsInvisibleCharacters: Bool = false {
         didSet {
-            textLayoutManager.invalidateLayout(for: textLayoutManager.documentRange)
+            textLayoutManager.invalidateLayout(for: textLayoutManager.textViewportLayoutController.viewportRange ?? textLayoutManager.documentRange)
         }
     }
 
@@ -523,11 +522,6 @@ import AVFoundation
 
     /// A Boolean value that controls whether the text views sharing the receiver’s layout manager use the Font panel and Font menu.
     open var usesFontPanel: Bool = true
-
-    /// A Boolean value that controls whether the text views sharing the receiver’s layout manager use a ruler.
-    ///
-    /// true to cause text views sharing the receiver's layout manager to respond to NSRulerView client messages and to paragraph-related menu actions, and update the ruler (when visible) as the selection changes with its paragraph and tab attributes, otherwise false.
-    open var usesRuler: Bool = true
 
     /// A Boolean value indicating whether the view needs scroll to visible selection pass before it can be drawn.
     internal var needsScrollToSelection: Bool = false {
@@ -601,7 +595,6 @@ import AVFoundation
 
         textContentManager = STTextContentStorage()
         textLayoutManager = STTextLayoutManager()
-        textLayoutManager.layoutQueue = OperationQueue()
         textLayoutManager.textContainer = STTextContainer()
         textLayoutManager.textContainer?.widthTracksTextView = false
         textLayoutManager.textContainer?.heightTracksTextView = true
@@ -609,11 +602,8 @@ import AVFoundation
         textContentManager.primaryTextLayoutManager = textLayoutManager
 
         contentView = ContentView()
-        contentView.autoresizingMask = [.height, .width]
         selectionView = SelectionView()
-        selectionView.autoresizingMask = [.height, .width]
         decorationView = DecorationView(textLayoutManager: textLayoutManager)
-        decorationView.autoresizingMask = [.height, .width]
 
         allowsUndo = true
         _undoManager = CoalescingUndoManager()
@@ -625,6 +615,8 @@ import AVFoundation
 
         super.init(frame: frameRect)
 
+        typingAttributes = defaultTypingAttributes
+
         textLayoutManager.delegate = self
         textFinderClient.textView = self
         textCheckingController = NSTextCheckingController(client: self)
@@ -633,7 +625,6 @@ import AVFoundation
         postsFrameChangedNotifications = true
 
         wantsLayer = true
-        canDrawSubviewsIntoLayer = true
         autoresizingMask = [.width, .height]
 
         textLayoutManager.textViewportLayoutController.delegate = self
@@ -687,6 +678,8 @@ import AVFoundation
 
     open override func resetCursorRects() {
         super.resetCursorRects()
+
+        let visibleRect = contentView.convert(contentView.visibleRect, to: self)
         if isSelectable, visibleRect != .zero {
             addCursorRect(visibleRect, cursor: .iBeam)
 
@@ -705,7 +698,7 @@ import AVFoundation
                        let linkTextRange = NSTextRange(location: startLocation, end: endLocation),
                        let linkTypographicBounds = textLayoutManager.typographicBounds(in: linkTextRange)
                     {
-                        addCursorRect(linkTypographicBounds, cursor: .pointingHand)
+                        addCursorRect(contentView.convert(linkTypographicBounds, to: self), cursor: .pointingHand)
                     } else {
                         stop.pointee = true
                     }
@@ -721,7 +714,7 @@ import AVFoundation
                        let linkTextRange = NSTextRange(location: startLocation, end: endLocation),
                        let linkTypographicBounds = textLayoutManager.typographicBounds(in: linkTextRange)
                     {
-                        addCursorRect(linkTypographicBounds, cursor: cursorValue)
+                        addCursorRect(contentView.convert(linkTypographicBounds, to: self), cursor: cursorValue)
                     } else {
                         stop.pointee = true
                     }
@@ -733,6 +726,17 @@ import AVFoundation
     open override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         self.updateSelectionHighlights()
+    }
+
+    open override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(enclosingClipViewBoundsDidChange(_:)),
+            name: NSClipView.boundsDidChangeNotification,
+            object: scrollView?.contentView
+        )
     }
 
     open override func viewDidMoveToWindow() {
@@ -823,7 +827,22 @@ import AVFoundation
 
     open override func prepareContent(in rect: NSRect) {
         super.prepareContent(in: rect.inset(dy: -visibleRect.height / 2))
-        needsLayout = true
+        layoutViewport()
+    }
+
+    /// The current selection range of the text view.
+    ///
+    /// If the length of the selection range is 0, indicating that the selection is actually an insertion point
+    public var textSelection: NSRange? {
+        set {
+            if let newValue {
+                self.setSelectedRange(newValue)
+            }
+        }
+
+        get {
+            return self.selectedRange()
+        }
     }
 
     open override func draw(_ dirtyRect: NSRect) {
@@ -965,7 +984,12 @@ import AVFoundation
     }
 
     /// Add attribute. Need `needsViewportLayout = true` to reflect changes.
-    open func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange, updateLayout: Bool = true) {
+    open func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange) {
+        addAttributes(attrs, range: range, updateLayout: true)
+    }
+
+    /// Add attribute. Need `needsViewportLayout = true` to reflect changes.
+    private func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange, updateLayout: Bool) {
         guard let textRange = NSTextRange(range, in: textContentManager) else {
             preconditionFailure("Invalid range \(range)")
         }
@@ -974,8 +998,7 @@ import AVFoundation
     }
 
     /// Add attribute. Need `needsViewportLayout = true` to reflect changes.
-    open func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSTextRange, updateLayout: Bool = true) {
-
+    internal func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSTextRange, updateLayout: Bool = true) {
         textContentManager.performEditingTransaction {
             (textContentManager as? NSTextContentStorage)?.textStorage?.addAttributes(attrs, range: NSRange(range, in: textContentManager))
         }
@@ -986,8 +1009,12 @@ import AVFoundation
         }
     }
 
-    /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
-    open func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange, updateLayout: Bool = true) {
+    /// Set attributes.
+    open func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange) {
+        setAttributes(attrs, range: range, updateLayout: true)
+    }
+
+    internal func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange, updateLayout: Bool = true) {
         guard let textRange = NSTextRange(range, in: textContentManager) else {
             preconditionFailure("Invalid range \(range)")
         }
@@ -996,7 +1023,7 @@ import AVFoundation
     }
 
     /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
-    open func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSTextRange, updateLayout: Bool = true) {
+    internal func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSTextRange, updateLayout: Bool = true) {
 
         textContentManager.performEditingTransaction {
             (textContentManager as? NSTextContentStorage)?.textStorage?.setAttributes(attrs, range: NSRange(range, in: textContentManager))
@@ -1010,7 +1037,12 @@ import AVFoundation
     }
 
     /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
-    open func removeAttribute(_ attribute: NSAttributedString.Key, range: NSRange, updateLayout: Bool = true) {
+    open func removeAttribute(_ attribute: NSAttributedString.Key, range: NSRange) {
+        removeAttribute(attribute, range: range, updateLayout: true)
+    }
+
+    /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
+    internal func removeAttribute(_ attribute: NSAttributedString.Key, range: NSRange, updateLayout: Bool) {
         guard let textRange = NSTextRange(range, in: textContentManager) else {
             preconditionFailure("Invalid range \(range)")
         }
@@ -1019,7 +1051,7 @@ import AVFoundation
     }
 
     /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
-    open func removeAttribute(_ attribute: NSAttributedString.Key, range: NSTextRange, updateLayout: Bool = true) {
+    internal func removeAttribute(_ attribute: NSAttributedString.Key, range: NSTextRange, updateLayout: Bool = true) {
 
         textContentManager.performEditingTransaction {
             (textContentManager as? NSTextContentStorage)?.textStorage?.removeAttribute(attribute, range: NSRange(range, in: textContentManager))
@@ -1076,11 +1108,11 @@ import AVFoundation
     private func _configureTextContainerSize() {
         var containerSize = textContainer.size
         if !isHorizontallyResizable {
-            containerSize.width = bounds.size.width // - _textContainerInset.width * 2
+            containerSize.width = contentView.bounds.maxX // - _textContainerInset.width * 2
         }
 
         if !isVerticallyResizable {
-            containerSize.height = bounds.size.height // - _textContainerInset.height * 2
+            containerSize.height = contentView.bounds.height // - _textContainerInset.height * 2
         }
 
         if !textContainer.size.isAlmostEqual(to: containerSize)  {
@@ -1098,6 +1130,10 @@ import AVFoundation
         _configureTextContainerSize()
     }
 
+    @objc internal func enclosingClipViewBoundsDidChange(_ notification: Notification) {
+        layoutGutter()
+    }
+
     open override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         layoutViewport()
@@ -1105,6 +1141,16 @@ import AVFoundation
 
     open override func layout() {
         super.layout()
+
+        let gutterPadding = gutterView?.bounds.width ?? 0
+        contentView.frame = CGRect(
+            x: gutterPadding,
+            y: frame.origin.y,
+            width: frame.width - gutterPadding,
+            height: frame.height
+        )
+        selectionView.frame = contentView.frame
+        decorationView.frame = contentView.frame
 
         layoutViewport()
 
@@ -1186,7 +1232,7 @@ import AVFoundation
         }
     }
 
-    private func layoutViewport() {
+    internal func layoutViewport() {
         // layoutViewport does not handle properly layout range
         // for far jump it tries to layout everything starting at location 0
         // even though viewport range is properly calculated.
@@ -1324,7 +1370,7 @@ import AVFoundation
                 with: previousStringInRange,
                 allowsTypingCoalescing: false
             )
-            textView.setSelectedTextRange(textRange)
+            textView.setSelectedTextRange(textRange, updateLayout: true)
         }
         undoManager.endUndoGrouping()
     }

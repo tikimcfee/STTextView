@@ -6,7 +6,7 @@
 //      |---ContentView
 //              |---STLineHighlightView
 //              |---STTextLayoutFragmentView
-//      |---STRulerView
+//      |---STGutterView
 
 import UIKit
 import STTextKitPlus
@@ -121,9 +121,16 @@ import STTextViewCommon
 
     /// Enable to show line numbers in the gutter.
     @Invalidating(.layout)
-    open var showLineNumbers: Bool = false {
+    public var showsLineNumbers: Bool = false {
         didSet {
-            isRulerVisible = showLineNumbers
+            isGutterVisible = showsLineNumbers
+        }
+    }
+
+    @Invalidating(.layout)
+    public var showsInvisibleCharacters: Bool = false {
+        didSet {
+            textLayoutManager.invalidateLayout(for: textLayoutManager.textViewportLayoutController.viewportRange ?? textLayoutManager.documentRange)
         }
     }
 
@@ -176,9 +183,7 @@ import STTextViewCommon
     }
 
     /// Gutter view
-    public var gutterView: STRulerView? {
-        rulerView
-    }
+    public var gutterView: STGutterView?
 
     /// Installed plugins. events value is available after plugin is setup
     internal var plugins: [Plugin] = []
@@ -186,7 +191,6 @@ import STTextViewCommon
     /// Content view. Layout fragments content.
     internal let contentView: ContentView
     internal let lineHighlightView: STLineHighlightView
-    internal var rulerView: STRulerView?
 
     internal var fragmentViewMap: NSMapTable<NSTextLayoutFragment, STTextLayoutFragmentView>
 
@@ -225,7 +229,13 @@ import STTextViewCommon
 
         return nil
     }
-    
+
+    /// A Boolean value that indicates whether the receiver allows undo.
+    ///
+    /// `true` if the receiver allows undo, otherwise `false`. Default `true`.
+    @objc dynamic public var allowsUndo: Bool
+    internal var _undoManager: UndoManager?
+
     internal var markedText: STMarkedText? = nil
 
     /// A tokenizer must be provided to inform the text input system about text units of varying granularity.
@@ -240,10 +250,10 @@ import STTextViewCommon
 
             if let prevLocation {
                 // restore selection location
-                setSelectedTextRange(NSTextRange(location: prevLocation))
+                setSelectedTextRange(NSTextRange(location: prevLocation), updateLayout: true)
             } else {
                 // or try to set at the begining of the document
-                setSelectedTextRange(NSTextRange(location: textContentManager.documentRange.location))
+                setSelectedTextRange(NSTextRange(location: textContentManager.documentRange.location), updateLayout: true)
             }
         }
 
@@ -263,10 +273,10 @@ import STTextViewCommon
 
             if let prevLocation {
                 // restore selection location
-                setSelectedTextRange(NSTextRange(location: prevLocation))
+                setSelectedTextRange(NSTextRange(location: prevLocation), updateLayout: true)
             } else {
                 // or try to set at the begining of the document
-                setSelectedTextRange(NSTextRange(location: textContentManager.documentRange.location))
+                setSelectedTextRange(NSTextRange(location: textContentManager.documentRange.location), updateLayout: true)
             }
         }
 
@@ -410,12 +420,17 @@ import STTextViewCommon
 
         contentView = ContentView()
 
+        allowsUndo = true
+        _undoManager = CoalescingUndoManager()
+
         lineHighlightView = STLineHighlightView()
         lineHighlightView.isHidden = true
 
         typingAttributes = [:]
 
         super.init(frame: frame)
+
+        typingAttributes = defaultTypingAttributes
 
         textLayoutManager.delegate = self
         textLayoutManager.textViewportLayoutController.delegate = self
@@ -430,7 +445,7 @@ import STTextViewCommon
         nonEditableTextInteraction.delegate = self
 
         updateEditableInteraction()
-        isRulerVisible = showLineNumbers
+        isGutterVisible = showsLineNumbers
 
         NotificationCenter.default.addObserver(forName: STTextLayoutManager.didChangeSelectionNotification, object: textLayoutManager, queue: .main) { [weak self] notification in
             guard let self = self else { return }
@@ -449,35 +464,57 @@ import STTextViewCommon
 
     /// This action method shows or hides the ruler, if the receiver is enclosed in a scroll view
     @objc public func toggleRuler(_ sender: Any?) {
-        isRulerVisible.toggle()
+        isGutterVisible.toggle()
     }
 
     /// A Boolean value that controls whether the scroll view enclosing text views sharing the receiver’s layout manager displays the ruler.
-    public var isRulerVisible: Bool {
+    public var isGutterVisible: Bool {
         set {
-            if rulerView == nil, newValue == true {
-                rulerView = STRulerView()
+            if gutterView == nil, newValue == true {
+                let gutterView = STGutterView()
                 if let font {
-                    rulerView?.font = font
+                    gutterView.font = adjustGutterFont(font)
                 }
-                rulerView?.frame.size.width = 40
+                gutterView.frame.size.width = gutterView.minimumThickness
                 if let textColor {
-                    rulerView?.selectedLineTextColor = textColor
+                    gutterView.selectedLineTextColor = textColor
                 }
-                rulerView?.highlightSelectedLine = highlightSelectedLine
-                rulerView?.selectedLineHighlightColor = selectedLineHighlightColor
-                self.addSubview(rulerView!)
+                gutterView.highlightSelectedLine = highlightSelectedLine
+                gutterView.selectedLineHighlightColor = selectedLineHighlightColor
+                self.addSubview(gutterView)
+                self.gutterView = gutterView
             } else if newValue == false {
-                rulerView?.removeFromSuperview()
-                rulerView = nil
+                gutterView?.removeFromSuperview()
+                gutterView = nil
             }
         }
         get {
-            rulerView != nil
+            gutterView != nil
         }
     }
 
-    public func setSelectedTextRange(_ textRange: NSTextRange, updateLayout: Bool = true) {
+    /// The current selection range of the text view.
+    ///
+    /// If the length of the selection range is 0, indicating that the selection is actually an insertion point
+    public var textSelection: NSRange? {
+        set {
+            if let newValue, let textRange = NSTextRange(newValue, in: textContentManager) {
+                setSelectedTextRange(textRange, updateLayout: true)
+            } else {
+                selectedTextRange = nil
+            }
+        }
+
+        get {
+            if let textRange = selectedTextRange?.nsTextRange {
+                return NSRange(textRange, in: textContentManager)
+            }
+
+            return nil
+        }
+    }
+
+    internal func setSelectedTextRange(_ textRange: NSTextRange, updateLayout: Bool) {
         guard isSelectable, textRange.endLocation <= textLayoutManager.documentRange.endLocation else {
             return
         }
@@ -490,7 +527,12 @@ import STTextViewCommon
     }
 
     /// Add attribute. Need `needsViewportLayout = true` to reflect changes.
-    open func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange, updateLayout: Bool = true) {
+    open func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange) {
+        addAttributes(attrs, range: range, updateLayout: true)
+    }
+
+    /// Add attribute. Need `needsViewportLayout = true` to reflect changes.
+    internal func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange, updateLayout: Bool) {
         guard let textRange = NSTextRange(range, in: textContentManager) else {
             preconditionFailure("Invalid range \(range)")
         }
@@ -499,7 +541,7 @@ import STTextViewCommon
     }
 
     /// Add attribute. Need `needsViewportLayout = true` to reflect changes.
-    open func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSTextRange, updateLayout: Bool = true) {
+    internal func addAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSTextRange, updateLayout: Bool = true) {
 
         textContentManager.performEditingTransaction {
             (textContentManager as? NSTextContentStorage)?.textStorage?.addAttributes(attrs, range: NSRange(range, in: textContentManager))
@@ -512,7 +554,12 @@ import STTextViewCommon
     }
 
     /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
-    open func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange, updateLayout: Bool = true) {
+    open func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange) {
+        setAttributes(attrs, range: range, updateLayout: true)
+    }
+
+    /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
+    internal func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSRange, updateLayout: Bool) {
         guard let textRange = NSTextRange(range, in: textContentManager) else {
             preconditionFailure("Invalid range \(range)")
         }
@@ -521,7 +568,7 @@ import STTextViewCommon
     }
 
     /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
-    open func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSTextRange, updateLayout: Bool = true) {
+    internal func setAttributes(_ attrs: [NSAttributedString.Key: Any], range: NSTextRange, updateLayout: Bool = true) {
 
         textContentManager.performEditingTransaction {
             (textContentManager as? NSTextContentStorage)?.textStorage?.setAttributes(attrs, range: NSRange(range, in: textContentManager))
@@ -535,7 +582,12 @@ import STTextViewCommon
     }
 
     /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
-    open func removeAttribute(_ attribute: NSAttributedString.Key, range: NSRange, updateLayout: Bool = true) {
+    open func removeAttribute(_ attribute: NSAttributedString.Key, range: NSRange) {
+        removeAttribute(attribute, range: range, updateLayout: true)
+    }
+
+    /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
+    internal func removeAttribute(_ attribute: NSAttributedString.Key, range: NSRange, updateLayout: Bool) {
         guard let textRange = NSTextRange(range, in: textContentManager) else {
             preconditionFailure("Invalid range \(range)")
         }
@@ -544,7 +596,7 @@ import STTextViewCommon
     }
 
     /// Set attributes. Need `needsViewportLayout = true` to reflect changes.
-    open func removeAttribute(_ attribute: NSAttributedString.Key, range: NSTextRange, updateLayout: Bool = true) {
+    internal func removeAttribute(_ attribute: NSAttributedString.Key, range: NSTextRange, updateLayout: Bool = true) {
 
         textContentManager.performEditingTransaction {
             (textContentManager as? NSTextContentStorage)?.textStorage?.removeAttribute(attribute, range: NSRange(range, in: textContentManager))
@@ -602,8 +654,8 @@ import STTextViewCommon
     }
 
     open override func sizeToFit() {
-        contentView.bounds.origin.x = -(rulerView?.frame.width ?? 0)
-        contentView.frame.size.width = max(textLayoutManager.usageBoundsForTextContainer.size.width, bounds.width - (rulerView?.frame.width ?? 0))
+        contentView.bounds.origin.x = -(gutterView?.frame.width ?? 0)
+        contentView.frame.size.width = max(textLayoutManager.usageBoundsForTextContainer.size.width, bounds.width - (gutterView?.frame.width ?? 0))
         contentView.frame.size.height = max(textLayoutManager.usageBoundsForTextContainer.size.height, bounds.height)
         contentSize = contentView.frame.size
 
@@ -667,10 +719,6 @@ import STTextViewCommon
         }
     }
 
-    open func replaceCharacters(in range: NSTextRange, with string: String) {
-        replaceCharacters(in: range, with: string, useTypingAttributes: true, allowsTypingCoalescing: false)
-    }
-
     open func insertText(_ string: Any, replacementRange: NSRange) {
         unmarkText()
 
@@ -699,6 +747,10 @@ import STTextViewCommon
         }
     }
 
+    open func replaceCharacters(in range: NSTextRange, with string: String) {
+        replaceCharacters(in: range, with: string, useTypingAttributes: true, allowsTypingCoalescing: false)
+    }
+
     internal func replaceCharacters(in textRanges: [NSTextRange], with replacementString: String, useTypingAttributes: Bool, allowsTypingCoalescing: Bool) {
         self.replaceCharacters(
             in: textRanges,
@@ -710,7 +762,7 @@ import STTextViewCommon
     internal func replaceCharacters(in textRanges: [NSTextRange], with replacementString: NSAttributedString, allowsTypingCoalescing: Bool) {
         // Replace from the end to beginning of the document
         for textRange in textRanges.sorted(by: { $0.location > $1.location }) {
-            replaceCharacters(in: textRange, with: replacementString, allowsTypingCoalescing: true)
+            replaceCharacters(in: textRange, with: replacementString, allowsTypingCoalescing: allowsTypingCoalescing)
         }
     }
 
@@ -720,6 +772,52 @@ import STTextViewCommon
             with: NSAttributedString(string: replacementString, attributes: useTypingAttributes ? typingAttributes : [:]),
             allowsTypingCoalescing: allowsTypingCoalescing
         )
+    }
+
+    internal func replaceCharacters(in textRange: NSTextRange, with replacementString: NSAttributedString, allowsTypingCoalescing: Bool) {
+        let previousStringInRange = (textContentManager as? NSTextContentStorage)!.attributedString!.attributedSubstring(from: NSRange(textRange, in: textContentManager))
+
+        textWillChange(self)
+        delegateProxy.textView(self, willChangeTextIn: textRange, replacementString: replacementString.string)
+
+        textContentManager.performEditingTransaction {
+            textContentManager.replaceContents(
+                in: textRange,
+                with: [NSTextParagraph(attributedString: replacementString)]
+            )
+        }
+
+        delegateProxy.textView(self, didChangeTextIn: textRange, replacementString: replacementString.string)
+        didChangeText()
+
+        guard allowsUndo, let undoManager = undoManager, undoManager.isUndoRegistrationEnabled else { return }
+
+        // Reach to NSTextStorage because NSTextContentStorage range extraction is cumbersome.
+        // A range that is as long as replacement string, so when undo it undo
+        let undoRange = NSTextRange(
+            location: textRange.location,
+            end: textContentManager.location(textRange.location, offsetBy: replacementString.length)
+        ) ?? textRange
+
+        if let coalescingUndoManager = undoManager as? CoalescingUndoManager, !undoManager.isUndoing, !undoManager.isRedoing {
+            if allowsTypingCoalescing /*&& processingKeyEvent*/ {
+               coalescingUndoManager.checkCoalescing(range: undoRange)
+           } else {
+               coalescingUndoManager.endCoalescing()
+           }
+        }
+        
+        undoManager.beginUndoGrouping()
+        undoManager.registerUndo(withTarget: self) { textView in
+            // Regular undo action
+            textView.replaceCharacters(
+                in: undoRange,
+                with: previousStringInRange,
+                allowsTypingCoalescing: false
+            )
+            textView.setSelectedTextRange(textRange, updateLayout: true)
+        }
+        undoManager.endUndoGrouping()
     }
 
     public func textWillChange(_ sender: Any?) {
@@ -741,21 +839,6 @@ import STTextViewCommon
 
         inputDelegate?.textDidChange(self)
         delegateProxy.textViewDidChangeText(notification)
-    }
-
-    internal func replaceCharacters(in textRange: NSTextRange, with replacementString: NSAttributedString, allowsTypingCoalescing: Bool) {
-        textWillChange(self)
-        delegateProxy.textView(self, willChangeTextIn: textRange, replacementString: replacementString.string)
-
-        textContentManager.performEditingTransaction {
-            textContentManager.replaceContents(
-                in: textRange,
-                with: [NSTextParagraph(attributedString: replacementString)]
-            )
-        }
-
-        delegateProxy.textView(self, didChangeTextIn: textRange, replacementString: replacementString.string)
-        didChangeText()
     }
 
     open override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
@@ -784,13 +867,7 @@ import STTextViewCommon
 
         layoutViewport()
         layoutLineHighlight()
-        layoutRuler()
-        layoutLineNumbers()
-    }
-
-    private func layoutRuler() {
-        rulerView?.frame.origin = contentOffset
-        rulerView?.frame.size.height = visibleSize.height
+        layoutGutter()
     }
 
     private func layoutViewport() {
@@ -903,106 +980,5 @@ import STTextViewCommon
         }
 
     }
-
-    private func layoutLineNumbers() {
-        guard let rulerView, let viewportRange = textLayoutManager.textViewportLayoutController.viewportRange else {
-            return
-        }
-
-        rulerView.lineNumberViewContainer.subviews.forEach { v in
-            v.removeFromSuperview()
-        }
-
-        let textElements = textContentManager.textElements(
-            for: NSTextRange(
-                location: textLayoutManager.documentRange.location,
-                end: viewportRange.location
-            )!
-        )
-
-        let lineTextAttributes: [NSAttributedString.Key: Any] = [
-            .font: rulerView.font,
-            .foregroundColor: UIColor.secondaryLabel.cgColor
-        ]
-
-        let selectedLineTextAttributes: [NSAttributedString.Key: Any] = [
-            .foregroundColor: (rulerView.selectedLineTextColor ?? rulerView.textColor).cgColor
-        ]
-
-        let startLineIndex = textElements.count
-        var linesCount = 0
-        textLayoutManager.enumerateTextLayoutFragments(in: viewportRange) { layoutFragment in
-            let contentRangeInElement = (layoutFragment.textElement as? NSTextParagraph)?.paragraphContentRange ?? layoutFragment.rangeInElement
-
-            for lineFragment in layoutFragment.textLineFragments where (lineFragment.isExtraLineFragment || layoutFragment.textLineFragments.first == lineFragment) {
-
-                func isLineSelected() -> Bool {
-                    textLayoutManager.textSelections.flatMap(\.textRanges).reduce(true) { partialResult, selectionTextRange in
-                        var result = true
-                        if lineFragment.isExtraLineFragment {
-                            let c1 = layoutFragment.rangeInElement.endLocation == selectionTextRange.location
-                            result = result && c1
-                        } else {
-                            let c1 = contentRangeInElement.contains(selectionTextRange)
-                            let c2 = contentRangeInElement.intersects(selectionTextRange)
-                            let c3 = selectionTextRange.contains(contentRangeInElement)
-                            let c4 = selectionTextRange.intersects(contentRangeInElement)
-                            let c5 = contentRangeInElement.endLocation == selectionTextRange.location
-                            result = result && (c1 || c2 || c3 || c4 || c5)
-                        }
-                        return partialResult && result
-                    }
-                }
-
-                let isLineSelected = isLineSelected()
-
-                var baselineYOffset: CGFloat = 0
-                if let paragraphStyle = lineFragment.attributedString.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle, !paragraphStyle.lineHeightMultiple.isAlmostZero() {
-                    baselineYOffset = -(lineFragment.typographicBounds.height * (paragraphStyle.lineHeightMultiple - 1.0) / 2)
-                }
-
-                let lineNumber = startLineIndex + linesCount + 1
-                let locationForFirstCharacter = lineFragment.locationForCharacter(at: 0)
-
-                var lineFragmentFrame = CGRect(origin: CGPoint(x: 0, y: layoutFragment.layoutFragmentFrame.origin.y - contentOffset.y), size: layoutFragment.layoutFragmentFrame.size)
-
-                lineFragmentFrame.origin.y += lineFragment.typographicBounds.origin.y
-                if lineFragment.isExtraLineFragment {
-                    lineFragmentFrame.size.height = lineFragment.typographicBounds.height
-                } else if !lineFragment.isExtraLineFragment, let extraLineFragment = layoutFragment.textLineFragments.first(where: { $0.isExtraLineFragment }) {
-                    lineFragmentFrame.size.height -= extraLineFragment.typographicBounds.height
-                }
-
-                var effectiveLineTextAttributes = lineTextAttributes
-                if highlightSelectedLine, isLineSelected, !selectedLineTextAttributes.isEmpty {
-                    effectiveLineTextAttributes.merge(selectedLineTextAttributes, uniquingKeysWith: { (_, new) in new })
-                }
-
-                let numberView = STLineNumberView(
-                    firstBaseline: locationForFirstCharacter.y + baselineYOffset,
-                    attributes: effectiveLineTextAttributes,
-                    number: lineNumber
-                )
-
-                numberView.insets = rulerView.rulerInsets
-
-                if rulerView.highlightSelectedLine, isLineSelected, textLayoutManager.textSelectionsRanges(.withoutInsertionPoints).isEmpty, !textLayoutManager.insertionPointSelections.isEmpty {
-                    numberView.backgroundColor = rulerView.selectedLineHighlightColor
-                }
-
-                numberView.frame = CGRect(
-                    origin: lineFragmentFrame.origin,
-                    size: CGSize(
-                        width: max(lineFragmentFrame.intersection(rulerView.lineNumberViewContainer.frame).width, rulerView.lineNumberViewContainer.frame.width),
-                        height: lineFragmentFrame.size.height
-                    )
-                )
-
-                rulerView.lineNumberViewContainer.addSubview(numberView)
-                linesCount += 1
-            }
-
-            return true
-        }
-    }
+    
 }

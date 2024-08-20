@@ -7,7 +7,7 @@ import STTextView
 
 /// This SwiftUI view can be used to view and edit rich text.
 @MainActor @preconcurrency
-public struct TextView: SwiftUI.View {
+public struct TextView: SwiftUI.View, TextViewModifier {
 
     @frozen
     public struct Options: OptionSet {
@@ -22,6 +22,9 @@ public struct TextView: SwiftUI.View {
 
         /// Highlighted selected line
         public static let highlightSelectedLine = Options(rawValue: 1 << 1)
+
+        /// Enable to show line numbers in the gutter.
+        public static let showLineNumbers = Options(rawValue: 1 << 2)
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -80,8 +83,9 @@ private struct TextViewRepresentable: NSViewRepresentable {
         let textView = scrollView.documentView as! STTextView
         textView.textDelegate = context.coordinator
         textView.highlightSelectedLine = options.contains(.highlightSelectedLine)
-        textView.widthTracksTextView = options.contains(.wrapLines)
-        textView.setSelectedRange(NSRange())
+        textView.isHorizontallyResizable = !options.contains(.wrapLines)
+        textView.showsLineNumbers = options.contains(.showLineNumbers)
+        textView.textSelection = NSRange()
 
         context.coordinator.isUpdating = true
         textView.attributedText = NSAttributedString(styledAttributedString(textView.typingAttributes))
@@ -108,8 +112,8 @@ private struct TextViewRepresentable: NSViewRepresentable {
             context.coordinator.isDidChangeText = false
         }
 
-        if textView.selectedRange() != selection, let selection {
-            textView.setSelectedRange(selection)
+        if textView.textSelection != selection, let selection {
+            textView.textSelection = selection
         }
 
         if textView.isEditable != isEnabled {
@@ -120,14 +124,16 @@ private struct TextViewRepresentable: NSViewRepresentable {
             textView.isSelectable = isEnabled
         }
 
-        let wrapLines = options.contains(.wrapLines)
-        if wrapLines != textView.widthTracksTextView {
-            textView.widthTracksTextView = options.contains(.wrapLines)
-        }
-
         if textView.font != font {
             textView.font = font
         }
+
+        if options.contains(.wrapLines) != textView.isHorizontallyResizable {
+            textView.isHorizontallyResizable = !options.contains(.wrapLines)
+        }
+
+        textView.needsLayout = true
+        textView.needsDisplay = true
     }
 
     func makeCoordinator() -> TextCoordinator {
@@ -166,7 +172,7 @@ private struct TextViewRepresentable: NSViewRepresentable {
             }
 
             if !isUpdating {
-                let newTextValue = AttributedString(textView.attributedString())
+                let newTextValue = AttributedString(textView.attributedText ?? NSAttributedString())
                 DispatchQueue.main.async {
                     self.isDidChangeText = true
                     self.parent.text = newTextValue

@@ -1,6 +1,4 @@
-<p align="center">
-  <img width="64" src="https://user-images.githubusercontent.com/758033/235909140-3589bb7d-51a0-4df3-8d71-2dc30fcabc8c.png">
-</p>
+<img height="45" src="https://user-images.githubusercontent.com/758033/235909140-3589bb7d-51a0-4df3-8d71-2dc30fcabc8c.png">
 
 # STTextView
 
@@ -13,14 +11,14 @@ The component is mainly developed to serve [Swift Studio](https://swiftstudio.ap
 
 ![Poster](https://github.com/user-attachments/assets/58b1a58b-d8bd-44d0-9946-2336335f3b0d)
 
-[TextKit 2](https://developer.apple.com/forums/tags/wwdc21-10061) was announced during [WWDC 2021](https://developer.apple.com/videos/play/wwdc2021/10061/) as a TextKit 1 replacement for text layout and whatnot. Apple announced that `NSTextView`, the view component specialized for text editing, will adopt TextKit 2 and provide support along TextKit 1 bit. As I started to learn more about `NSTextView` + TextKit2, I realized as of today (Feb 2022), neither `NSTextView` is fully functional, nor TextKit 2 classes are fully functional. Along the way, I reported several bug reports to Apple requesting DTS (support tickets). Eventually, I got blocked by specific bugs that pushed me to start this project.
+[TextKit 2](https://developer.apple.com/forums/tags/wwdc21-10061) was announced during [WWDC 2021](https://developer.apple.com/videos/play/wwdc2021/10061/) as a TextKit 1 replacement for text layout and whatnot. Apple announced that `NSTextView`, the view component specialized for text editing, will adopt TextKit 2 and provide support along TextKit 1 bit. As I started to learn more about `NSTextView` + TextKit2, I realized that as of today (Feb 2022), neither `NSTextView` nor TextKit 2 classes are fully functional. Along the way, I reported several bug reports to Apple requesting DTS (support tickets). Eventually, I got blocked by specific bugs that pushed me to start this project.
 
 ## ✨ Features
 
 - macOS text system integration
 - Performant Text editing
-- Line numbers in a ruler view
-- Ruler Markers support
+- Display line numbers
+- Display invisible characters
 - Customization of colors and fonts
 - Toggle line wrapping on and off
 - Adjust the height of lines
@@ -29,7 +27,6 @@ The component is mainly developed to serve [Swift Studio](https://swiftstudio.ap
 - Search/Replace the text
 - Spelling and Grammar
 - Dictation
-- Display Invisible Characters
 - Customizable Completion support
 - Smooth scrolling of long content
 - LTR (Left To Right) / RTL (Right To Left) layout
@@ -45,12 +42,6 @@ The component is mainly developed to serve [Swift Studio](https://swiftstudio.ap
 ## 🤝 Support & Sponsors
 
 The financial sustainability of the project is possible thanks to the ongoing contributions from our [GitHub Sponsors](https://github.com/sponsors/krzyzanowskim)
-
-### Premium Sponsors
-
-  [Judo](https://judo.app) is a design and build tool for SwiftUI apps that writes production-ready code for you while you’re designing. Eliminate back-and-forth with developers and free them from unrewarding grunt work.
-
-[<img alt="judo.app" width="200" src="https://github-production-user-asset-6210df.s3.amazonaws.com/758033/257891209-932464f9-d756-4ddb-9946-198901ace96f.png" />](https://judo.app)
 
 ## 🗓️ Roadmap
 
@@ -69,7 +60,7 @@ STTextView is already well-suited as a text editor component. However, it still 
 ```swift
 let package = Package(
     dependencies: [
-        .package(url: "https://github.com/krzyzanowskim/STTextView", from: "0.9.0")
+        .package(url: "https://github.com/krzyzanowskim/STTextView", from: "0.9.6")
     ]
 )
 ```
@@ -80,13 +71,13 @@ The demo applications [TextEdit](TextEdit) and [TextEdit.SwiftUI](TextEdit.Swift
 
 ## Plugins
 
-Plugins in an STTextView component offer additional functionalities and customizations beyond the basic text display. They enhance the core capabilities of the text view by adding features such as syntax highlighting, word count tracking, and more. These plugins expand the STTextView's utility while maintaining a modular and adaptable software structure.
+Plugins in an STTextView component offer additional functionalities and customizations beyond the simple text display. They enhance the core capabilities of the text view by adding features such as syntax highlighting, word count tracking, and more. These plugins expand the STTextView's utility while maintaining a modular and adaptable software structure.
 
 - [Plugin-Neon](https://github.com/krzyzanowskim/STTextView-Plugin-Neon) Source Code Syntax Highlighting with [TreeSitter](https://tree-sitter.github.io/tree-sitter/) and [Neon](https://github.com/ChimeHQ/Neon).
 - [Plugin-TextFormation](https://github.com/ChimeHQ/STTextView-Plugin-TextFormation) Typing completions with [TextFormation](https://github.com/ChimeHQ/TextFormation).
 - [Plugin-Annotations](https://github.com/krzyzanowskim/STTextView-Plugin-Annotations) Anchored annotations (eg. inlined error message)) plugin.
-- [Plugin-Template](https://github.com/krzyzanowskim/STTextView-Plugin-Template) Dummy plugin template repository ready bo build new plugin.
-- ... add more plugins
+- [Plugin-Template](https://github.com/krzyzanowskim/STTextView-Plugin-Template) Dummy plugin template repository ready to build new plugin.
+- ... [add more](https://github.com/topics/sttextview) plugins
 
 ## Usage
 
@@ -119,7 +110,7 @@ struct ContentView: View {
 
 ### Create a TextView
 
-The `STTextView` is an `NSView` subclass and can be initialized like any other view. It has an API that is similar to the one of NSTextView.
+The `STTextView` is an `NSView` subclass and can be initialized like any other view. It has an API that is similar to that of NSTextView.
 
 ```swift
 import STTextView
@@ -171,14 +162,9 @@ textView.isHorizontallyResizable = true
 textView.highlightSelectedLine = true
 ```
 
-Add line numbers using specialized `STLineNumberRulerView` (specialized subclass of `NSRulerView`)
+Add gutter with line numbers
 
 ```swift
-let textView = STTextView()
-let scrollView = NSScrollView()
-scrollView.documentView = textView
-
-// Line numbers
 textView.showLineNumbers = true
 textView.gutterView?.drawSeparator = true
 ```
@@ -209,7 +195,8 @@ List of **TextKit 2** issues and bugs related to NSTextView and the TextKit fram
 - FB13272586: NSTextContainer.size default value is not as documented
 - [FB13290979](https://gist.github.com/krzyzanowskim/7adc5ee66be68df2f76b9752476aadfb): NSTextContainer.lineFragmentPadding does not affect end of the fragment usageBoundsForTextContainer rectangle
 - [FB13291926](https://gist.github.com/krzyzanowskim/33a2478fa2281b77816acb7a7f6f77ac): NSTextLayoutManager.usageBoundsForTextContainer observer is never trigerred
-- [FB13789916](https://gist.github.com/krzyzanowskim/340c5810fc427e346b7c4b06d46b1e10): NSTextInputClient.setMarkedText provide bogus selection range for Chinese keyboard 
+- [FB13789916](https://gist.github.com/krzyzanowskim/340c5810fc427e346b7c4b06d46b1e10): NSTextInputClient.setMarkedText provide bogus selection range for Chinese keyboard
+- [FB14700414](https://gist.github.com/krzyzanowskim/0a83eb9d5303016b277920a6b7c9f9fc): NSTextList doesn't work since macOS 14 (regression)
 
 ... I'm aware that the list of issues is not complete. I managed to workaround most of the problems in STTextView.
 

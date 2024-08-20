@@ -23,7 +23,8 @@ class ViewController: UIViewController {
         textView.typingAttributes[.paragraphStyle] = paragraph
         textView.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
         textView.text = try! String(contentsOf: Bundle.main.url(forResource: "content", withExtension: "txt")!)
-        textView.showLineNumbers = true
+        textView.showsLineNumbers = true
+        textView.showsInvisibleCharacters = true
         textView.gutterView?.drawSeparator = true
         view.addSubview(textView)
         self.textView = textView
@@ -66,20 +67,28 @@ class ViewController: UIViewController {
         textView.widthTracksTextView.toggle()
     }
 
+    @IBAction func toggleInvisibles(_ sender: Any?) {
+        textView.showsInvisibleCharacters.toggle()
+    }
+
+    @IBAction func toggleRuler(_ sender: Any?) {
+        textView.showsLineNumbers.toggle()
+    }
+
 }
 
 extension ViewController: STTextViewDelegate {
 
     func textViewWillChangeText(_ notification: Notification) {
-        print("textViewWillChangeText")
+
     }
 
     func textViewDidChangeText(_ notification: Notification) {
-        print("textViewDidChangeText")
+
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
-        print("textViewDidChangeSelection")
+
     }
 
     func textView(_ textView: STTextView, shouldChangeTextIn affectedCharRange: NSTextRange, replacementString: String?) -> Bool {

@@ -6,11 +6,11 @@ import STTextKitPlus
 
 extension STTextView {
 
-    public func selectedTextRange() -> NSTextRange? {
+    internal func selectedTextRange() -> NSTextRange? {
         textLayoutManager.textSelections.last?.textRanges.last
     }
 
-    public func setSelectedTextRange(_ textRange: NSTextRange, updateLayout: Bool = true) {
+    internal func setSelectedTextRange(_ textRange: NSTextRange, updateLayout: Bool) {
         guard isSelectable, textRange.endLocation <= textLayoutManager.documentRange.endLocation else {
             return
         }
@@ -26,11 +26,11 @@ extension STTextView {
         }
     }
 
-    public func setSelectedRange(_ range: NSRange) {
+    internal func setSelectedRange(_ range: NSRange) {
         guard let textRange = NSTextRange(range, in: textContentManager) else {
             preconditionFailure("Invalid range \(range)")
         }
-        setSelectedTextRange(textRange)
+        setSelectedTextRange(textRange, updateLayout: true)
     }
     
     open override func selectAll(_ sender: Any?) {
