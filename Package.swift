@@ -9,7 +9,7 @@ let package = Package(
         .library(
             name: "STTextView",
             targets: ["STTextView", "STTextViewSwiftUI"]
-        )
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/krzyzanowskim/STTextKitPlus", from: "0.1.3"),

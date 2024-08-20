@@ -28,7 +28,9 @@ extension STTextView {
 
     internal func setSelectedRange(_ range: NSRange) {
         guard let textRange = NSTextRange(range, in: textContentManager) else {
-            preconditionFailure("Invalid range \(range)")
+//            preconditionFailure("Invalid range \(range)")
+            print("Can't set range; invalid state in content manager")
+            return
         }
         setSelectedTextRange(textRange, updateLayout: true)
     }
