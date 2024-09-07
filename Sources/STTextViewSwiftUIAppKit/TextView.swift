@@ -86,6 +86,7 @@ private struct TextViewRepresentable: NSViewRepresentable {
         textView.isHorizontallyResizable = !options.contains(.wrapLines)
         textView.showsLineNumbers = options.contains(.showLineNumbers)
         textView.textSelection = NSRange()
+        textView.textColor = .white
 
         context.coordinator.isUpdating = true
         textView.attributedText = NSAttributedString(styledAttributedString(textView.typingAttributes))
@@ -114,6 +115,7 @@ private struct TextViewRepresentable: NSViewRepresentable {
 
         if textView.textSelection != selection, let selection {
             textView.textSelection = selection
+            textView.scrollRangeToVisible(selection)
         }
 
         if textView.isEditable != isEnabled {
