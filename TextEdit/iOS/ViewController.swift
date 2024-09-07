@@ -21,10 +21,10 @@ class ViewController: UIViewController {
         paragraph.lineHeightMultiple = 1.2
         textView.defaultParagraphStyle = paragraph
 
-        textView.font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        textView.font = UIFont.monospacedSystemFont(ofSize: 0, weight: .regular)
         textView.text = try! String(contentsOf: Bundle.main.url(forResource: "content", withExtension: "txt")!)
         textView.showsLineNumbers = true
-        textView.showsInvisibleCharacters = true
+        textView.showsInvisibleCharacters = false
         textView.gutterView?.drawSeparator = true
         view.addSubview(textView)
         self.textView = textView

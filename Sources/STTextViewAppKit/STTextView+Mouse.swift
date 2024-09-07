@@ -28,7 +28,9 @@ extension STTextView {
             if !handled, holdsShift && holdsControl {
                 textLayoutManager.appendInsertionPointSelection(interactingAt: eventPoint)
                 updateTypingAttributes()
-                updateSelectionHighlights()
+                updateSelectedRangeHighlight()
+                layoutGutter()
+                updateSelectedLineHighlight()
                 needsDisplay = true
                 handled = true
             }

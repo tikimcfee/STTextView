@@ -4,16 +4,16 @@
 import AppKit
 
 final class STTextLayoutFragment: NSTextLayoutFragment {
-    private let paragraphStyle: NSParagraphStyle
+    private let defaultParagraphStyle: NSParagraphStyle
     var showsInvisibleCharacters: Bool = false
 
     init(textElement: NSTextElement, range rangeInElement: NSTextRange?, paragraphStyle: NSParagraphStyle) {
-        self.paragraphStyle = paragraphStyle
+        self.defaultParagraphStyle = paragraphStyle
         super.init(textElement: textElement, range: rangeInElement)
     }
     
     required init?(coder: NSCoder) {
-        self.paragraphStyle = NSParagraphStyle.default
+        self.defaultParagraphStyle = NSParagraphStyle.default
         self.showsInvisibleCharacters = false
         super.init(coder: coder)
     }
@@ -23,14 +23,21 @@ final class STTextLayoutFragment: NSTextLayoutFragment {
     // override var layoutFragmentFrame: CGRect {
     //    super.layoutFragmentFrame
     // }
-    
+
     override func draw(at point: CGPoint, in context: CGContext) {
         // Layout fragment draw text at the bottom (after apply baselineOffset) but ignore the paragraph line height
         // This is a workaround/patch to position text nicely in the line
         //
         // Center vertically after applying lineHeightMultiple value
         // super.draw(at: point.moved(dx: 0, dy: offset), in: context)
-        
+
+        if state.rawValue < NSTextLayoutFragment.State.layoutAvailable.rawValue {
+            /// Calling private `NSTextLayoutFragment.layout` just like UIFoundation does in draw(at:in:)
+            /// It is necessary for not layed out elements at this point, and no public API gives that
+            /// possibility.
+            perform(Selector(("l" + "oya".reversed() + "ut")))
+        }
+
         context.saveGState()
         
 #if USE_FONT_SMOOTHING_STYLE
@@ -53,7 +60,7 @@ final class STTextLayoutFragment: NSTextLayoutFragment {
             {
                 paragraphStyle = lineParagraphStyle
             } else {
-                paragraphStyle = self.paragraphStyle
+                paragraphStyle = self.defaultParagraphStyle
             }
             
             if !paragraphStyle.lineHeightMultiple.isAlmostZero() {

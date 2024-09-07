@@ -33,13 +33,16 @@ let package = Package(
             name: "STTextViewAppKit",
             dependencies: [
                 .target(name: "STTextViewCommon"),
-                .product(name: "STTextKitPlus", package: "STTextKitPlus")
+                .target(name: "STObjCLandShim", condition: .when(platforms: [.macOS])),
+                .product(name: "STTextKitPlus", package: "STTextKitPlus"),
+                .product(name: "CoreTextSwift", package: "CoreTextSwift")
             ]
         ),
         .target(
             name: "STTextViewUIKit",
             dependencies: [
                 .target(name: "STTextViewCommon"),
+                .target(name: "STObjCLandShim", condition: .when(platforms: [.iOS, .macCatalyst])),
                 .product(name: "STTextKitPlus", package: "STTextKitPlus"),
                 .product(name: "CoreTextSwift", package: "CoreTextSwift")
             ],
@@ -65,6 +68,10 @@ let package = Package(
             dependencies: [
                 .target(name: "STTextView")
             ]
+        ),
+        .target(
+            name: "STObjCLandShim",
+            publicHeadersPath: "include"
         ),
         .testTarget(
             name: "STTextViewAppKitTests",

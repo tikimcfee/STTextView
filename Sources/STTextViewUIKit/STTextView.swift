@@ -156,6 +156,8 @@ import STTextViewCommon
             if !textLayoutManager.documentRange.isEmpty {
                 addAttributes([.font: newValue], range: textLayoutManager.documentRange)
             }
+
+            updateTypingAttributes()
         }
     }
 
@@ -180,6 +182,8 @@ import STTextViewCommon
 
     /// Content view. Layout fragments content.
     internal let contentView: ContentView
+
+    /// Line highlight view.
     internal let lineHighlightView: STLineHighlightView
 
     internal var fragmentViewMap: NSMapTable<NSTextLayoutFragment, STTextLayoutFragmentView>
@@ -310,7 +314,7 @@ import STTextViewCommon
     }
 
     /// Default typing attributes used in place of missing attributes of font, color and paragraph
-    private var _defaultTypingAttributes: [NSAttributedString.Key: Any]
+    internal var _defaultTypingAttributes: [NSAttributedString.Key: Any]
 
     /// The attributes to apply to new text that the user enters.
     ///
@@ -343,8 +347,8 @@ import STTextViewCommon
     }
 
     internal func typingAttributes(at startLocation: NSTextLocation) -> [NSAttributedString.Key : Any] {
-        guard !textLayoutManager.documentRange.isEmpty else {
-            return typingAttributes
+        if textLayoutManager.documentRange.isEmpty {
+            return _defaultTypingAttributes
         }
 
         var typingAttrs: [NSAttributedString.Key: Any] = [:]
@@ -411,11 +415,11 @@ import STTextViewCommon
 
         contentView = ContentView()
 
-        allowsUndo = true
-        _undoManager = CoalescingUndoManager()
-
         lineHighlightView = STLineHighlightView()
         lineHighlightView.isHidden = true
+
+        allowsUndo = true
+        _undoManager = CoalescingUndoManager()
 
         _defaultTypingAttributes = [
             .paragraphStyle: NSParagraphStyle.default,
@@ -426,6 +430,8 @@ import STTextViewCommon
         _typingAttributes = [:]
 
         super.init(frame: frame)
+
+        setSelectedTextRange(NSTextRange(location: textLayoutManager.documentRange.location), updateLayout: false)
 
         textLayoutManager.delegate = self
         textLayoutManager.textViewportLayoutController.delegate = self
@@ -465,21 +471,17 @@ import STTextViewCommon
     /// The current selection range of the text view.
     ///
     /// If the length of the selection range is 0, indicating that the selection is actually an insertion point
-    public var textSelection: NSRange? {
+    public var textSelection: NSRange {
         set {
-            if let newValue, let textRange = NSTextRange(newValue, in: textContentManager) {
-                setSelectedTextRange(textRange, updateLayout: true)
-            } else {
-                selectedTextRange = nil
-            }
+            setSelectedRange(newValue)
         }
 
         get {
-            if let textRange = selectedTextRange?.nsTextRange {
-                return NSRange(textRange, in: textContentManager)
+            if let selectionTextRange = textLayoutManager.textSelections.last?.textRanges.last {
+                return NSRange(selectionTextRange, in: textContentManager)
             }
 
-            return nil
+            return .notFound
         }
     }
 
@@ -488,11 +490,18 @@ import STTextViewCommon
             return
         }
 
-        selectedTextRange = textRange.uiTextRange
+        self.selectedTextRange = textRange.uiTextRange
 
         if updateLayout {
             setNeedsLayout()
         }
+    }
+
+    internal func setSelectedRange(_ range: NSRange) {
+        guard let textRange = NSTextRange(range, in: textContentManager) else {
+            preconditionFailure("Invalid range \(range)")
+        }
+        setSelectedTextRange(textRange, updateLayout: true)
     }
 
     /// Add attribute. Need `needsViewportLayout = true` to reflect changes.
@@ -706,14 +715,17 @@ import STTextViewCommon
         case let string as String:
             if shouldChangeText(in: textRanges, replacementString: string) {
                 replaceCharacters(in: textRanges, with: string, useTypingAttributes: true, allowsTypingCoalescing: true)
+                updateTypingAttributes()
             }
         case let attributedString as NSAttributedString:
             if shouldChangeText(in: textRanges, replacementString: attributedString.string) {
                 replaceCharacters(in: textRanges, with: attributedString, allowsTypingCoalescing: true)
+                updateTypingAttributes()
             }
         default:
             assertionFailure()
         }
+
     }
 
     open func replaceCharacters(in range: NSTextRange, with string: String) {
@@ -845,7 +857,8 @@ import STTextViewCommon
         textLayoutManager.textViewportLayoutController.layoutViewport()
     }
 
-    internal func updateSelectionHighlights() {
+    // Update selected line highlight layer
+    internal func updateSelectedLineHighlight() {
         guard highlightSelectedLine,
               textLayoutManager.textSelectionsRanges(.withoutInsertionPoints).isEmpty,
               !textLayoutManager.insertionPointSelections.isEmpty
@@ -871,83 +884,75 @@ import STTextViewCommon
                         width: contentView.frame.width,
                         height: typingLineHeight
                     )
-                )
+                ).pixelAligned
             }
-            return
-        }
+        } else if let viewportRange = textLayoutManager.textViewportLayoutController.viewportRange {
+            // build the rectangle out of fragments rectangles
+            var combinedFragmentsRect: CGRect?
 
-        guard let viewportRange = textLayoutManager.textViewportLayoutController.viewportRange else {
-            return
-        }
+            // TODO some beutiful day:
+            // Don't rely on NSTextParagraph.paragraphContentRange, but that
+            // makes tricky to get all the conditions right (especially for last line)
+            // Problem is that NSTextParagraph.rangeInElement span across two lines (eg. "abc\n" are two lines) while
+            // paragraphContentRange is just one ("abc")
+            //
+            // Another idea here is to use `textLayoutManager.textLayoutFragment(for: selectionTextRange.location)`
+            // to find the layout fragment and us its frame as highlight area. It has its issue when it comes to the
+            // extra line fragment area (sic).
+            textLayoutManager.enumerateTextLayoutFragments(in: viewportRange) { layoutFragment in
+                let contentRangeInElement = (layoutFragment.textElement as? NSTextParagraph)?.paragraphContentRange ?? layoutFragment.rangeInElement
+                for lineFragment in layoutFragment.textLineFragments {
 
-        // build the rectangle out of fragments rectangles
-        var combinedFragmentsRect: CGRect?
-
-        // TODO some beutiful day:
-        // Don't rely on NSTextParagraph.paragraphContentRange, but that
-        // makes tricky to get all the conditions right (especially for last line)
-        // Problem is that NSTextParagraph.rangeInElement span across two lines (eg. "abc\n" are two lines) while
-        // paragraphContentRange is just one ("abc")
-        //
-        // Another idea here is to use `textLayoutManager.textLayoutFragment(for: selectionTextRange.location)`
-        // to find the layout fragment and us its frame as highlight area. It has its issue when it comes to the
-        // extra line fragment area (sic).
-        textLayoutManager.enumerateTextLayoutFragments(in: viewportRange) { layoutFragment in
-            let contentRangeInElement = (layoutFragment.textElement as? NSTextParagraph)?.paragraphContentRange ?? layoutFragment.rangeInElement
-            for lineFragment in layoutFragment.textLineFragments {
-
-                func isLineSelected() -> Bool {
-                    textLayoutManager.textSelections.flatMap(\.textRanges).reduce(true) { partialResult, selectionTextRange in
-                        var result = true
-                        if lineFragment.isExtraLineFragment {
-                            let c1 = layoutFragment.rangeInElement.endLocation == selectionTextRange.location
-                            result = result && c1
-                        } else {
-                            let c1 = contentRangeInElement.contains(selectionTextRange)
-                            let c2 = contentRangeInElement.intersects(selectionTextRange)
-                            let c3 = selectionTextRange.contains(contentRangeInElement)
-                            let c4 = selectionTextRange.intersects(contentRangeInElement)
-                            let c5 = contentRangeInElement.endLocation == selectionTextRange.location
-                            result = result && (c1 || c2 || c3 || c4 || c5)
+                    func isLineSelected() -> Bool {
+                        textLayoutManager.textSelections.flatMap(\.textRanges).reduce(true) { partialResult, selectionTextRange in
+                            var result = true
+                            if lineFragment.isExtraLineFragment {
+                                let c1 = layoutFragment.rangeInElement.endLocation == selectionTextRange.location
+                                result = result && c1
+                            } else {
+                                let c1 = contentRangeInElement.contains(selectionTextRange)
+                                let c2 = contentRangeInElement.intersects(selectionTextRange)
+                                let c3 = selectionTextRange.contains(contentRangeInElement)
+                                let c4 = selectionTextRange.intersects(contentRangeInElement)
+                                let c5 = contentRangeInElement.endLocation == selectionTextRange.location
+                                result = result && (c1 || c2 || c3 || c4 || c5)
+                            }
+                            return partialResult && result
                         }
-                        return partialResult && result
                     }
-                }
 
-                let isLineSelected = isLineSelected()
+                    let isLineSelected = isLineSelected()
 
-                if isLineSelected {
-                    var lineFragmentFrame = layoutFragment.layoutFragmentFrame
-                    lineFragmentFrame.size.height = lineFragment.typographicBounds.height
+                    if isLineSelected {
+                        var lineFragmentFrame = layoutFragment.layoutFragmentFrame
+                        lineFragmentFrame.size.height = lineFragment.typographicBounds.height
 
 
-                    let r = CGRect(
-                        origin: CGPoint(
-                            x: contentView.frame.origin.x,
-                            y: lineFragmentFrame.origin.y + lineFragment.typographicBounds.minY
-                        ),
-                        size: CGSize(
-                            width: contentView.frame.size.width,
-                            height: lineFragmentFrame.height
+                        let r = CGRect(
+                            origin: CGPoint(
+                                x: contentView.frame.origin.x,
+                                y: lineFragmentFrame.origin.y + lineFragment.typographicBounds.minY
+                            ),
+                            size: CGSize(
+                                width: contentView.frame.size.width,
+                                height: lineFragmentFrame.height
+                            )
                         )
-                    )
 
-                    if let rect = combinedFragmentsRect {
-                        combinedFragmentsRect = rect.union(r)
-                    } else {
-                        combinedFragmentsRect = r
+                        if let rect = combinedFragmentsRect {
+                            combinedFragmentsRect = rect.union(r)
+                        } else {
+                            combinedFragmentsRect = r
+                        }
                     }
                 }
+                return true
             }
-            return true
-        }
 
-        if let combinedFragmentsRect {
-            lineHighlightView.frame = combinedFragmentsRect.pixelAligned
+            if let combinedFragmentsRect {
+                lineHighlightView.frame = combinedFragmentsRect.pixelAligned
+            }
         }
-
-        // Update gutter selection
-        layoutGutter()
     }
     
 }
